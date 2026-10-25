@@ -1,0 +1,20 @@
+{
+  "name": "Sonic similarity",
+  "author": "Thilo Utke",
+  "version": "1.0.0",
+  "description": "Similar tracks and Instant Mix from MusicNN audio embeddings computed by the navidrome-sonic sidecar",
+  "permissions": {
+    "http": {
+      "reason": "Query the navidrome-sonic sidecar, a private address on the Docker network",
+      "requiredHosts": [
+        "*"
+      ]
+    },
+    "matcher": {
+      "reason": "Resolve a track ID to the file size, duration and title the sidecar looks it up by"
+    },
+    "library": {
+      "reason": "Navidrome requires it for the matcher; no filesystem access"
+    }
+  }
+}

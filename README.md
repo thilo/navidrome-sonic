@@ -1,0 +1,102 @@
+# navidrome-sonic
+
+Audio-similarity recommendations for [Navidrome](https://www.navidrome.org/):
+Instant Mix in the web UI, `getSimilarSongs2`, and the OpenSubsonic
+`getSonicSimilarTracks` / `findSonicPath` calls, ranked by what the tracks sound
+like.
+
+Two parts, built into one image:
+
+- `sonic.py`, a sidecar that walks the music library once an hour, computes a
+  MusicNN embedding for every new or changed file (the model and analysis
+  [LMS](https://github.com/epoupon/lms) uses) and answers nearest-neighbour
+  queries over HTTP. Embeddings live in SQLite under `/data`. Runs on one
+  thread with Python, numpy, onnxruntime and ffmpeg.
+- `plugin/`, a Navidrome plugin (`sonic.ndp`) that implements the
+  SonicSimilarity capability and the `GetSimilarSongsByTrack` metadata agent by
+  asking the sidecar. It needs no filesystem access: it sends the seed track's
+  file size, duration and title, and the results come back as tags that
+  Navidrome matches to its own tracks.
+
+On start the container copies `sonic.ndp` into `/plugins`, which Navidrome
+mounts as its plugin folder.
+
+## Compose
+
+```yaml
+services:
+  navidrome:
+    image: deluan/navidrome:0.64.2
+    environment:
+      ND_PLUGINS_ENABLED: "true"
+      ND_PLUGINS_FOLDER: /plugins
+      # First agent: answers Instant Mix; the others take over for tracks it
+      # has no answer for.
+      ND_AGENTS: sonic,deezer,lastfm,listenbrainz
+    volumes:
+      - music:/music:ro
+      - navidrome_data:/data
+      - navidrome_plugins:/plugins:ro
+    networks: [default, sonic]
+    depends_on:
+      navidrome-sonic:
+        condition: service_healthy
+
+  navidrome-sonic:
+    build: https://github.com/CHANGEME/navidrome-sonic.git
+    init: true
+    # Must be able to read the music files.
+    user: "1000:1000"
+    volumes:
+      - music:/music:ro
+      - navidrome_sonic_data:/data
+      - navidrome_plugins:/plugins
+    networks: [sonic]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+
+networks:
+  # The sidecar's API has no authentication.
+  sonic:
+    internal: true
+
+volumes:
+  music:
+  navidrome_data:
+  navidrome_sonic_data:
+  navidrome_plugins:
+```
+
+The plugin reaches the sidecar at `http://navidrome-sonic:8000`, so the service
+keeps that name. The two containers may mount the library at different paths.
+
+## Enabling the plugin
+
+Navidrome loads a new plugin disabled. Enable it once after the first start,
+and again whenever `sonic.ndp` changes, which Navidrome detects by its hash:
+
+```bash
+docker compose exec navidrome navidrome plugin edit sonic --all-libraries
+docker compose exec navidrome navidrome plugin enable sonic
+docker compose restart navidrome
+```
+
+The package is built reproducibly, so rebuilding the image without plugin
+changes keeps it enabled.
+
+Until a track is analysed, Instant Mix for it falls back to the agents after
+`sonic` in `ND_AGENTS`.
+
+## Test
+
+```bash
+python3 sonic.py test
+```
+
+The Docker build runs it too.
+
+## License
+
+GPL-3.0 (see [LICENSE](LICENSE)); the plugin links Navidrome's GPL-3.0 PDK.
+The bundled model file has its own origin, see [NOTICE](NOTICE).
