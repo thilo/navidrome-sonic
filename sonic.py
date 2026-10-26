@@ -159,6 +159,11 @@ class Index:
         self.songs = [m["song"] for m in meta]
         self.release = [(m["albumArtist"].lower(), m["song"]["album"].lower()) for m in meta]
         self.artists = [{a["name"].lower() for a in m["song"]["artists"]} for m in meta]
+        # A row repeats a picked one if it shares its MBID or all its tags, as the
+        # same file in a user's own library and a shared one does: Navidrome
+        # resolves both answers to the same track.
+        self.keys = [{json.dumps(m["song"], sort_keys=True)} | ({m["song"]["mbid"]} if m["song"]["mbid"] else set())
+                     for m in meta]
         self.vec, self.threshold = np.zeros((0, DIMS), np.float32), np.inf
         if len(rows) < 2:
             return
@@ -201,30 +206,32 @@ class Index:
     def dist(self, q):
         return (1 - q @ self.vec.T) / 2
 
-    def penalty(self, c, chosen, prev, fit):
-        """LMS's soft constraints: distance to the seed and to the previous track,
-        plus repeats of a release or artist among the last WINDOW picks."""
-        score = W_FIT * fit + W_SMOOTH * float(self.dist(self.vec[prev])[c])
+    def penalty(self, c, chosen, smooth, fit):
+        """LMS's soft constraints: distance to the seed and to the previous track
+        (smooth, distances from it), plus repeats of a release or artist among the
+        last WINDOW picks."""
+        score = W_FIT * fit + W_SMOOTH * float(smooth[c])
         for i, s in enumerate(reversed(chosen[-WINDOW:]), 1):
             score += W_RELEASE * (self.release[s] == self.release[c]) / i
             score += W_ARTIST * bool(self.artists[s] & self.artists[c]) / i
         return score
 
-    def rejects(self, c, chosen):
-        mbid = self.songs[c]["mbid"]
-        return c in chosen or (mbid and any(self.songs[s]["mbid"] == mbid for s in chosen))
+    def taken(self, picks):
+        return set().union(*(self.keys[c] for c in picks))
 
     def similar(self, seed, count):
         d = self.dist(self.vec[seed])
         d[seed] = np.inf
         ranked = [int(c) for c in np.argsort(d)[:count * OVERSAMPLE] if d[c] <= self.threshold]
-        chosen, out = [seed], []
+        chosen, out, taken = [seed], [], self.taken([seed])
         while len(out) < count:
-            ok = [c for c in ranked if not self.rejects(c, chosen)]
-            if not ok:
+            ranked = [c for c in ranked if taken.isdisjoint(self.keys[c])]
+            if not ranked:
                 break
-            best = min(ok, key=lambda c: self.penalty(c, chosen, chosen[-1], float(d[c])))
+            smooth = self.dist(self.vec[chosen[-1]])
+            best = min(ranked, key=lambda c: self.penalty(c, chosen, smooth, float(d[c])))
             chosen.append(best)
+            taken |= self.keys[best]
             out.append((best, 1 - float(d[best])))
         return out
 
@@ -236,11 +243,11 @@ class Index:
             d = self.dist(q / max(np.linalg.norm(q), 1e-12))
             d[end] = np.inf
             near = [int(c) for c in np.argsort(d)[:PATH_NEIGHBOURS]]
-            step = near[0]
-            ok = [c for c in near if not self.rejects(c, chosen)]
+            fit, smooth = self.dist(self.vec[near[0]]), self.dist(self.vec[chosen[-1]])
+            taken = self.taken(chosen + [end])
+            ok = [c for c in near if taken.isdisjoint(self.keys[c])]
             if ok:
-                chosen.append(min(ok, key=lambda c: self.penalty(
-                    c, chosen, chosen[-1], float(self.dist(self.vec[step])[c]))))
+                chosen.append(min(ok, key=lambda c: self.penalty(c, chosen, smooth, float(fit[c]))))
         if count > 1:
             chosen.append(end)
         d = self.dist(self.vec[start])
@@ -383,8 +390,9 @@ def test():
     assert abs(FB.sum(axis=1) - 1).max() < 1e-5
 
     # Ranking: a same-artist neighbour loses to a slightly farther other artist.
-    def row(path, artist, vec, size=None, seconds=0):
-        song = {"name": path, "artists": [{"name": artist}], "album": path, "mbid": "", "durationMs": seconds * 1000}
+    def row(path, artist, vec, size=None, seconds=0, name=None):
+        song = {"name": name or path, "artists": [{"name": artist}], "album": name or path, "mbid": "",
+                "durationMs": seconds * 1000}
         return (path, json.dumps({"song": song, "albumArtist": artist}), np.asarray(vec, np.float32).tobytes(),
                 size if size is not None else hash(path))
     rng = np.random.default_rng(1)
@@ -394,6 +402,8 @@ def test():
     rows += [row(f"far{i}", f"F{i}", rng.standard_normal(200)) for i in range(80)]
     # Size lookup: three files of one size, told apart by duration, then title.
     rows += [row(name, "C", rng.standard_normal(200), 1000, s) for name, s in (("x", 100), ("y", 200), ("z", 200))]
+    # The seed's file again in another library: never offered as similar to itself.
+    rows += [row("seed-copy", "A", base, name="seed")]
     assert Index(rows[:2]).by_size == {}
     idx = Index(rows)
     assert idx.paths[idx.find("1000", "199.4", "z")] == "z"

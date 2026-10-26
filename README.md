@@ -69,12 +69,28 @@ volumes:
 ```
 
 The plugin reaches the sidecar at `http://navidrome-sonic:8000`, so the service
-keeps that name. The two containers may mount the library at different paths.
+keeps that name, on a private Docker network. The two containers may mount the
+library at different paths.
+
+## Several libraries and users
+
+Mount every Navidrome library somewhere below the sidecar's `/music`; it
+analyses whatever it finds there as one collection.
+
+Results are per user. The sidecar answers from all libraries, and Navidrome
+matches the answer within the libraries the requesting user can open: a track
+in someone else's library drops out, a track in a shared library stays. The
+same file in several libraries is offered once. For Instant Mix the plugin asks
+for three times the requested count, so dropped tracks leave room for shared
+ones; `getSonicSimilarTracks` and `findSonicPath` return at most the requested
+count before that filtering.
 
 ## Enabling the plugin
 
 Navidrome loads a new plugin disabled. Enable it once after the first start,
-and again whenever `sonic.ndp` changes, which Navidrome detects by its hash:
+and again whenever `sonic.ndp` changes, which Navidrome detects by its hash.
+The plugin looks up the seed track in the libraries it is granted, so grant it
+all of them:
 
 ```bash
 docker compose exec navidrome navidrome plugin edit sonic --all-libraries

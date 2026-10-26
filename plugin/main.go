@@ -4,9 +4,10 @@
 // The sidecar knows tracks by file, Navidrome by its own ID. A seed goes out as
 // the file size, with duration and title to tell apart files of equal size: the
 // Matcher service resolves the ID to a track, which carries all three without
-// filesystem access. Results come back as tags (title, artists, album, MBIDs,
-// duration), which Navidrome matches to its own tracks within the caller's
-// libraries.
+// filesystem access. The match runs unscoped, within the libraries the plugin is
+// granted; Navidrome has already checked that the caller can see the seed.
+// Results come back as tags (title, artists, album, MBIDs, duration), which
+// Navidrome matches to its own tracks within the caller's libraries.
 package main
 
 import (
@@ -81,8 +82,13 @@ func (plugin) FindSonicPath(req sonicsimilarity.FindSonicPathRequest) (sonicsimi
 
 // GetSimilarSongsByTrack serves Instant Mix and getSimilarSongs2. An error (track
 // not analysed yet, sidecar down) lets Navidrome fall through to the next agent.
+//
+// Navidrome matches the answer within the requesting user's libraries, drops
+// repeats and trims it to the requested count. The plugin does not learn who
+// asks, so it requests three times as many: tracks in libraries that user
+// cannot open then leave room for ones in the libraries they share.
 func (p plugin) GetSimilarSongsByTrack(req metadata.SimilarSongsByTrackRequest) (*metadata.SimilarSongsResponse, error) {
-	res, err := p.GetSonicSimilarTracks(sonicsimilarity.GetSonicSimilarTracksRequest{Song: types.SongRef{ID: req.ID}, Count: req.Count})
+	res, err := p.GetSonicSimilarTracks(sonicsimilarity.GetSonicSimilarTracksRequest{Song: types.SongRef{ID: req.ID}, Count: 3 * req.Count})
 	if err != nil {
 		return nil, err
 	}
