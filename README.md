@@ -14,12 +14,27 @@ Two parts, built into one image:
   thread with Python, numpy, onnxruntime and ffmpeg.
 - `plugin/`, a Navidrome plugin (`sonic.ndp`) that implements the
   SonicSimilarity capability and the `GetSimilarSongsByTrack` metadata agent by
-  asking the sidecar. It needs no filesystem access: it sends the seed track's
-  file size, duration and title, and the results come back as tags that
-  Navidrome matches to its own tracks.
+  asking the sidecar, without filesystem access (see [Track lookup](#track-lookup)).
 
 On start the container copies `sonic.ndp` into `/plugins`, which Navidrome
 mounts as its plugin folder.
+
+## Track lookup
+
+Navidrome and the sidecar know tracks by different keys. Navidrome's track IDs
+are random, assigned when a library is first scanned, so the sidecar cannot
+derive them; the sidecar knows files.
+
+For a seed track the plugin asks Navidrome's matcher for the track by ID. The
+answer carries the file size, duration and title, and the plugin sends those to
+the sidecar, which looks the track up by size, takes the closest duration among
+files of equal size and then an exact title. Answers go back as tags (title,
+artists, album, MBIDs, duration), which Navidrome matches to its own tracks.
+
+The manifest requests `matcher` for that lookup, `library` because Navidrome
+requires it alongside `matcher`, and `http` for the sidecar. It does not request
+`library.filesystem`: the lookup works without it, and with it Navidrome would
+also give the plugin track paths and read access to every library file.
 
 ## Compose
 
