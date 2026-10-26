@@ -5,17 +5,34 @@ Instant Mix in the web UI, `getSimilarSongs2`, and the OpenSubsonic
 `getSonicSimilarTracks` / `findSonicPath` calls, ranked by what the tracks sound
 like.
 
+## Features
+
+- Similar tracks and Instant Mix from the audio itself, not from tags or play
+  history.
+- Independent of file paths: the plugin needs no filesystem access, and
+  Navidrome and the sidecar may mount the library at different paths (see
+  [Track lookup](#track-lookup)).
+- Each file's audio is analysed once. A moved, renamed or retagged file keeps
+  its embedding, and the same file in several libraries is analysed once and
+  offered once.
+- Results per user: each user gets tracks from the libraries they can open,
+  shared libraries included (see
+  [Several libraries and users](#several-libraries-and-users)).
+- Runs on one CPU thread next to Navidrome, without a database server or GPU.
+
+## How it works
+
 Two parts, built into one image:
 
 - `sonic.py`, a sidecar that walks the music library once an hour, computes a
   MusicNN embedding for every file with new audio (the model and analysis
   [LMS](https://github.com/epoupon/lms) uses) and answers nearest-neighbour
-  queries over HTTP. A moved or retagged file keeps its embedding. Embeddings
-  live in SQLite under `/data`. Runs on one thread with Python, numpy,
-  onnxruntime and ffmpeg.
+  queries over HTTP. Embeddings live in SQLite under `/data`, each with a hash
+  of the audio stream, which paths and tags don't affect. Runs on one thread
+  with Python, numpy, onnxruntime and ffmpeg.
 - `plugin/`, a Navidrome plugin (`sonic.ndp`) that implements the
   SonicSimilarity capability and the `GetSimilarSongsByTrack` metadata agent by
-  asking the sidecar, without filesystem access (see [Track lookup](#track-lookup)).
+  asking the sidecar.
 
 On start the container copies `sonic.ndp` into `/plugins`, which Navidrome
 mounts as its plugin folder.
@@ -85,8 +102,7 @@ volumes:
 ```
 
 The plugin reaches the sidecar at `http://navidrome-sonic:8000`, so the service
-keeps that name, on a private Docker network. The two containers may mount the
-library at different paths.
+keeps that name, on a private Docker network.
 
 ## Several libraries and users
 
@@ -95,11 +111,10 @@ analyses whatever it finds there as one collection.
 
 Results are per user. The sidecar answers from all libraries, and Navidrome
 matches the answer within the libraries the requesting user can open: a track
-in someone else's library drops out, a track in a shared library stays. The
-same file in several libraries is offered once. For Instant Mix the plugin asks
-for three times the requested count, so dropped tracks leave room for shared
-ones; `getSonicSimilarTracks` and `findSonicPath` return at most the requested
-count before that filtering.
+in someone else's library drops out, a track in a shared library stays. For
+Instant Mix the plugin asks for three times the requested count, so dropped
+tracks leave room for shared ones; `getSonicSimilarTracks` and `findSonicPath`
+return at most the requested count before that filtering.
 
 ## Enabling the plugin
 
