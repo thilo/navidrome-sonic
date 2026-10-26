@@ -1,7 +1,7 @@
 {
   "name": "Sonic similarity",
   "author": "Thilo Utke",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Similar tracks and Instant Mix from MusicNN audio embeddings computed by the navidrome-sonic sidecar",
   "permissions": {
     "http": {

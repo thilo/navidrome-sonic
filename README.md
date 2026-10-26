@@ -58,7 +58,7 @@ services:
         condition: service_healthy
 
   navidrome-sonic:
-    build: https://github.com/CHANGEME/navidrome-sonic.git
+    build: https://github.com/thilo/navidrome-sonic.git#v0.1.0
     init: true
     # Must be able to read the music files.
     user: "1000:1000"
