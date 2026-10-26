@@ -25,9 +25,11 @@ import io
 import json
 import os
 import random
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -129,6 +131,14 @@ def probe(path):
         "albumMbid": get("musicbrainz_albumid", "musicbrainz album id"),
         "durationMs": int(duration * 1000),
     }, album_artist
+
+
+def audio_hash(path):
+    """SHA-256 of the first audio stream's packets, copied without decoding: equal
+    for a moved or retagged file, so its embedding can be reused."""
+    out = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-map", "0:a:0", "-c", "copy",
+                          "-f", "hash", "-hash", "sha256", "-"], capture_output=True, timeout=300, check=True).stdout
+    return out.decode().strip().split("=", 1)[1]
 
 
 def embed(session, path, duration):
@@ -271,8 +281,9 @@ def raise_error(e):
 
 
 def scan(db, session):
-    known = {p: (m, s) for p, m, s in db.execute("SELECT path, mtime, size FROM track")}
-    seen, changed = set(), 0
+    known = {p: (m, s, a) for p, m, s, a in db.execute("SELECT path, mtime, size, audio FROM track")}
+    by_audio = dict(db.execute("SELECT audio, emb FROM track WHERE audio != '' AND emb IS NOT NULL"))
+    seen, changed, analysed = set(), 0, 0
     # onerror raises, so an unreadable mount aborts the pass instead of reading as
     # an empty library and dropping every embedding.
     for root, dirs, files in os.walk(MUSIC, onerror=raise_error):
@@ -284,20 +295,41 @@ def scan(db, session):
             path = os.path.join(root, name)
             st = os.stat(path)
             seen.add(path)
-            if known.get(path) == (int(st.st_mtime), st.st_size):
+            old = known.get(path)
+            if old and old[:2] == (int(st.st_mtime), st.st_size):
+                # Rows stored before the audio column get their hash on the first
+                # pass, which reads each such file once without decoding it. ""
+                # marks a file ffmpeg could not hash, so it is not retried.
+                if old[2] is None:
+                    try:
+                        audio = audio_hash(path)
+                    except Exception as e:
+                        log(f"skip {path}: {e}")
+                        audio = ""
+                    db.execute("UPDATE track SET audio = ? WHERE path = ?", (audio, path))
+                    db.commit()
+                    emb = db.execute("SELECT emb FROM track WHERE path = ?", (path,)).fetchone()[0]
+                    if audio and emb is not None:
+                        by_audio[audio] = emb
                 continue
-            emb, meta = None, None
+            emb, meta, audio = None, None, None
             try:
                 duration, song, album_artist = probe(path)
                 meta = json.dumps({"song": song, "albumArtist": album_artist})
-                emb = embed(session, path, duration)
+                audio = audio_hash(path)
+                emb = by_audio.get(audio)
+                if emb is None:
+                    vec = embed(session, path, duration)
+                    analysed += 1
+                    if vec is not None:
+                        emb = by_audio[audio] = vec.tobytes()
             except Exception as e:  # one bad file must not stop the pass
                 log(f"skip {path}: {e}")
             if emb is None:
                 log(f"no embedding: {path}")
             # A failed file is stored too, so it is retried only once it changes.
-            db.execute("INSERT OR REPLACE INTO track VALUES (?, ?, ?, ?, ?)",
-                       (path, int(st.st_mtime), st.st_size, meta, emb.tobytes() if emb is not None else None))
+            db.execute("INSERT OR REPLACE INTO track (path, mtime, size, meta, emb, audio) VALUES (?, ?, ?, ?, ?, ?)",
+                       (path, int(st.st_mtime), st.st_size, meta, emb, audio or ""))
             db.commit()
             changed += 1
             if changed % REINDEX_EVERY == 0:
@@ -306,7 +338,8 @@ def scan(db, session):
     if seen:
         db.executemany("DELETE FROM track WHERE path = ?", [(p,) for p in gone])
         db.commit()
-    log(f"scan: {len(seen)} files, {changed} analysed, {len(gone) if seen else 0} removed")
+    log(f"scan: {len(seen)} files, {changed} new or changed, {analysed} analysed, "
+        f"{len(gone) if seen else 0} removed")
     return changed or (gone and seen)
 
 
@@ -362,11 +395,17 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def init_db(db):
+    db.execute("CREATE TABLE IF NOT EXISTS track "
+               "(path TEXT PRIMARY KEY, mtime INTEGER, size INTEGER, meta TEXT, emb BLOB, audio TEXT)")
+    if "audio" not in [c[1] for c in db.execute("PRAGMA table_info(track)")]:
+        db.execute("ALTER TABLE track ADD COLUMN audio TEXT")
+
+
 def main():
     db = sqlite3.connect(DB)
     db.execute("PRAGMA journal_mode=WAL")
-    db.execute("CREATE TABLE IF NOT EXISTS track "
-               "(path TEXT PRIMARY KEY, mtime INTEGER, size INTEGER, meta TEXT, emb BLOB)")
+    init_db(db)
     db.close()
     threading.Thread(target=scanner, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
@@ -419,6 +458,42 @@ def test():
     assert picks == ["other", "same"], picks
     route = [idx.paths[c] for c, _ in idx.route(0, 3, 4)]
     assert route[0] == "seed" and route[-1] == "far0" and len(set(route)) == len(route), route
+
+    # Scan: a moved file and a retagged one keep their embeddings, and rows from
+    # before the audio column get a hash without being analysed again.
+    global MUSIC
+    class Session:
+        runs = 0
+        def run(self, _, feeds):
+            Session.runs += 1
+            return [np.full((1, 200), feeds["mel_patch"].mean(), np.float32)]
+    def ffmpeg(*args):
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", *args], check=True)
+    music, MUSIC = MUSIC, tempfile.mkdtemp()
+    try:
+        ffmpeg("-f", "lavfi", "-i", "sine=f=440:d=5", "-metadata", "title=A", f"{MUSIC}/a.mp3")
+        ffmpeg("-f", "lavfi", "-i", "sine=f=660:d=5", "-metadata", "title=B", f"{MUSIC}/b.mp3")
+        db = sqlite3.connect(":memory:")
+        init_db(db)
+        scan(db, Session())
+        before = dict(db.execute("SELECT audio, emb FROM track"))
+        assert Session.runs == 2 and len(before) == 2 and None not in before.values(), Session.runs
+        os.makedirs(f"{MUSIC}/moved")
+        os.rename(f"{MUSIC}/a.mp3", f"{MUSIC}/moved/a.mp3")
+        ffmpeg("-i", f"{MUSIC}/b.mp3", "-c", "copy", "-metadata", "title=B2", f"{MUSIC}/b2.mp3")
+        os.replace(f"{MUSIC}/b2.mp3", f"{MUSIC}/b.mp3")
+        os.utime(f"{MUSIC}/b.mp3", (0, 0))
+        scan(db, Session())
+        rows = {os.path.relpath(p, MUSIC): (json.loads(m)["song"]["name"], a, e)
+                for p, m, a, e in db.execute("SELECT path, meta, audio, emb FROM track")}
+        assert Session.runs == 2 and sorted(rows) == ["b.mp3", "moved/a.mp3"], (Session.runs, sorted(rows))
+        assert rows["b.mp3"][0] == "B2" and all(before[a] == e for _, a, e in rows.values())
+        db.execute("UPDATE track SET audio = NULL")
+        assert not scan(db, Session()) and Session.runs == 2
+        assert dict(db.execute("SELECT audio, emb FROM track")) == before
+    finally:
+        shutil.rmtree(MUSIC)
+        MUSIC = music
     print("ok")
 
 

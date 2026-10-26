@@ -8,10 +8,11 @@ like.
 Two parts, built into one image:
 
 - `sonic.py`, a sidecar that walks the music library once an hour, computes a
-  MusicNN embedding for every new or changed file (the model and analysis
+  MusicNN embedding for every file with new audio (the model and analysis
   [LMS](https://github.com/epoupon/lms) uses) and answers nearest-neighbour
-  queries over HTTP. Embeddings live in SQLite under `/data`. Runs on one
-  thread with Python, numpy, onnxruntime and ffmpeg.
+  queries over HTTP. A moved or retagged file keeps its embedding. Embeddings
+  live in SQLite under `/data`. Runs on one thread with Python, numpy,
+  onnxruntime and ffmpeg.
 - `plugin/`, a Navidrome plugin (`sonic.ndp`) that implements the
   SonicSimilarity capability and the `GetSimilarSongsByTrack` metadata agent by
   asking the sidecar, without filesystem access (see [Track lookup](#track-lookup)).
