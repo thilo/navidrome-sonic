@@ -55,3 +55,6 @@ source. The user docs at navidrome.org describe less than that README.
   sizes. A measurement that justifies a setting goes in one line beside it.
 - Commit subject: one imperative line, no trailing period. Body: one paragraph
   of three or four lines on what was wrong and why the fix works.
+- No `Co-Authored-By` trailer for an AI assistant unless asked.
+- Before committing, scan the whole diff for grading adjectives, dates,
+  measured numbers, host facts and duplicated rationale.
