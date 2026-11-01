@@ -42,6 +42,7 @@ import numpy as np  # noqa: E402
 MUSIC = "/music"
 DB = "/data/sonic.db"
 MODEL = "/opt/sonic/MSD_musicnn_embedding.onnx"
+DECODE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sonic-decode")  # built from decode.c
 PORT = 8000
 SCAN_INTERVAL = 3600
 REINDEX_EVERY = 200  # rebuild the index during a long first pass, not only at its end
@@ -83,12 +84,25 @@ POWER_SCALE = 1 / (np.sum(WIN ** 2) * N_FFT)
 FRAMES = np.arange(PATCH)[:, None] * HOP + np.arange(N_FFT)
 
 
-def patches(read, frame_count):
-    """Yield SPAN-sample windows of the zero-left-padded signal, laid out like LMS:
-    gap, patch, gap, patch, ... until the stream ends. frame_count 0 means unknown."""
+def frames(duration):
+    total = int(duration * SR)
+    return 1 + (total - N_FFT // 2) // HOP if total >= N_FFT // 2 else 0
+
+
+def layout(frame_count):
+    """Signal sample of the first window and the distance between windows, laid out like
+    LMS: gap, patch, gap, patch, ... frame_count 0 means unknown. The first window may
+    start at -HOP, in the zero padding."""
     n = min(MAX_PATCHES, frame_count // PATCH)
     gap = (frame_count - n * PATCH) // (n + 1) if n else (0 if frame_count else 2 * PATCH)
-    buf, base, start, eof = np.zeros(HOP, np.float32), 0, gap * HOP, False
+    return gap * HOP - HOP, (PATCH + gap) * HOP
+
+
+def patches(read, frame_count):
+    """Yield SPAN-sample windows of the zero-left-padded signal at layout(frame_count)
+    until the stream ends: what sonic-decode writes, as the self-check's reference."""
+    first, step = layout(frame_count)
+    buf, base, start, eof = np.zeros(HOP, np.float32), 0, first + HOP, False
     while True:
         while base + len(buf) < start + SPAN and not eof:
             chunk = read(1 << 18)
@@ -100,7 +114,7 @@ def patches(read, frame_count):
         if len(seg) < SPAN:
             return
         yield seg
-        start += (PATCH + gap) * HOP
+        start += step
 
 
 def log_mel(seg):
@@ -136,23 +150,22 @@ def probe(path):
 def audio_hash(path):
     """SHA-256 of the first audio stream's packets, copied without decoding: equal
     for a moved or retagged file, so its embedding can be reused."""
-    out = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-map", "0:a:0", "-c", "copy",
-                          "-f", "hash", "-hash", "sha256", "-"], capture_output=True, timeout=300, check=True).stdout
-    return out.decode().strip().split("=", 1)[1]
+    return subprocess.run([DECODE, "hash", path], capture_output=True, timeout=300, check=True).stdout.decode().strip()
 
 
 def embed(session, path, duration):
-    proc = subprocess.Popen(["ffmpeg", "-nostdin", "-v", "error", "-threads", "1", "-i", path,
-                             "-map", "0:a:0", "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    total = int(duration * SR)
-    frame_count = 1 + (total - N_FFT // 2) // HOP if total >= N_FFT // 2 else 0
+    first, step = layout(frames(duration))
+    proc = subprocess.Popen([DECODE, "windows", path, str(first), str(step), str(SPAN)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     vecs = []
     try:
-        for seg in patches(proc.stdout.read, frame_count):
-            mel, rms = log_mel(seg)
+        while len(seg := proc.stdout.read(SPAN * 4)) == SPAN * 4:
+            mel, rms = log_mel(np.frombuffer(seg, "<f4"))
             if rms >= MIN_PATCH_RMS:
                 vecs.append(session.run(None, {"mel_patch": mel[None]})[0][0])
+        # Its stderr is at most one line, so reading it after stdout cannot block.
+        if proc.wait():
+            raise RuntimeError(f"sonic-decode: {proc.stderr.read().decode().strip()}")
     finally:
         proc.kill()
         proc.wait()
@@ -416,10 +429,10 @@ def main():
 def test():
     # Patch layout: 100 s known -> 20 patches with equal gaps; unknown -> gap of 2 patches.
     sig = np.random.default_rng(0).standard_normal(SR * 100).astype(np.float32)
-    frames = 1 + (len(sig) - N_FFT // 2) // HOP
-    segs = list(patches(io.BytesIO(sig.tobytes()).read, frames))
+    frame_count = frames(len(sig) / SR)
+    segs = list(patches(io.BytesIO(sig.tobytes()).read, frame_count))
     assert len(segs) == 20, len(segs)
-    gap = (frames - 20 * PATCH) // 21
+    gap = (frame_count - 20 * PATCH) // 21
     first = gap * HOP - HOP  # padded index -> signal index
     assert np.array_equal(segs[0], sig[first:first + SPAN])
     unknown = list(patches(io.BytesIO(sig.tobytes()).read, 0))
@@ -494,6 +507,83 @@ def test():
     finally:
         shutil.rmtree(MUSIC)
         MUSIC = music
+
+    # sonic-decode against the ffmpeg CLI it replaces: the same packet hash, and the same
+    # windows as patches() over the CLI's decode, which is what embed() read before.
+    def cli_hash(path):
+        out = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-map", "0:a:0", "-c", "copy",
+                              "-f", "hash", "-hash", "sha256", "-"], capture_output=True, check=True).stdout
+        return out.decode().strip().split("=", 1)[1]
+    def cli_windows(path, frame_count):
+        pcm = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-threads", "1", "-i", path, "-map", "0:a:0",
+                              "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"], capture_output=True, check=True).stdout
+        return [seg.tobytes() for seg in patches(io.BytesIO(pcm).read, frame_count)]
+    def windows(path, frame_count):
+        first, step = layout(frame_count)
+        out = subprocess.run([DECODE, "windows", path, str(first), str(step), str(SPAN)],
+                             capture_output=True, check=True).stdout
+        return [out[i:i + SPAN * 4] for i in range(0, len(out), SPAN * 4)]
+    tmp = tempfile.mkdtemp()
+    try:
+        # Layout, through a 16 kHz mono float WAV, which decodes to the signal itself: gaps,
+        # unknown duration, and gap 0 (first window at -HOP, overlapping windows).
+        short = sig[:(20 * PATCH - 1) * HOP + N_FFT // 2]
+        assert layout(20 * PATCH)[0] == -HOP and layout(20 * PATCH)[1] < SPAN
+        for s, count in ((sig, frame_count), (sig, 0), (short, 20 * PATCH)):
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "f32le", "-ar", str(SR), "-ac", "1",
+                            "-i", "-", "-c:a", "pcm_f32le", f"{tmp}/layout.wav"], input=s.tobytes(), check=True)
+            want = [seg.tobytes() for seg in patches(io.BytesIO(s.tobytes()).read, count)]
+            assert want and windows(f"{tmp}/layout.wav", count) == want, count
+
+        # Codecs and containers, windowed and decoded in full. 120 s put the windows far enough
+        # apart for separate segments, also with FLAC's and WAV's 4096-sample packets.
+        ffmpeg("-f", "lavfi", "-i", "aevalsrc=0.4*sin(2*PI*220*t)+0.1*(2*random(0)-1)|"
+               "0.4*sin(2*PI*331*t)+0.1*(2*random(1)-1):s=44100:d=120", f"{tmp}/src.wav")
+        files = {"a.mp3": ["-c:a", "libmp3lame"], "b.mp3": ["-ar", "48000", "-c:a", "libmp3lame"],
+                 "c.flac": [], "d.wav": ["-c:a", "pcm_s16le"], "e.ogg": ["-c:a", "libvorbis"],
+                 "f.m4a": ["-c:a", "aac"], "g.opus": ["-c:a", "libopus"], "h.wma": ["-c:a", "wmav2"]}
+        for name, args in files.items():
+            ffmpeg("-i", f"{tmp}/src.wav", *args, f"{tmp}/{name}")
+        # Restarts in full mode and filter graph rebuilds: a chained Ogg and a mp3 whose sample
+        # rate and channels change; a flac frame without its sync code, which the decoder
+        # drops, so the later samples move up; a mp3 frame without its header, which never
+        # becomes a packet.
+        def cat(name, *parts):
+            with open(f"{tmp}/{name}", "wb") as f:
+                for p in parts:
+                    f.write(open(f"{tmp}/{p}", "rb").read())
+            files[name] = None
+        def damage(name, source, at, new):
+            """Overwrites the start of the packet nearest `at` seconds."""
+            out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+                                  "packet=pts_time,pos", "-of", "json", f"{tmp}/{source}"],
+                                 capture_output=True, check=True).stdout
+            i = int(min(json.loads(out)["packets"], key=lambda p: abs(float(p["pts_time"]) - at))["pos"])
+            data = bytearray(open(f"{tmp}/{source}", "rb").read())
+            data[i:i + len(new)] = new
+            open(f"{tmp}/{name}", "wb").write(data)
+            files[name] = None
+        ffmpeg("-i", f"{tmp}/src.wav", "-t", "60", "-c:a", "libvorbis", f"{tmp}/x1.ogg")
+        ffmpeg("-i", f"{tmp}/src.wav", "-ss", "60", "-ar", "22050", "-ac", "1", "-c:a", "libvorbis", f"{tmp}/x2.ogg")
+        cat("chained.ogg", "x1.ogg", "x2.ogg")
+        ffmpeg("-i", f"{tmp}/src.wav", "-t", "60", "-c:a", "libmp3lame", f"{tmp}/x1.mp3")
+        ffmpeg("-i", f"{tmp}/src.wav", "-ss", "60", "-ar", "48000", "-ac", "1", "-c:a", "libmp3lame",
+               "-write_xing", "0", "-id3v2_version", "0", f"{tmp}/x2.mp3")
+        cat("rates.mp3", "x1.mp3", "x2.mp3")
+        # Between two segments, which only the packet check sees: after window 9 ends and
+        # before window 10's preroll (about a second) starts.
+        first, step = layout(frames(probe(f"{tmp}/c.flac")[0]))
+        at = (first + 9 * step + SPAN) / SR + 0.8
+        damage("nosync.flac", "c.flac", at, bytes(2))
+        damage("noheader.mp3", "a.mp3", 60, bytes(4))
+        for name in files:
+            path = f"{tmp}/{name}"
+            count = frames(probe(path)[0])
+            want = cli_windows(path, count)
+            assert audio_hash(path) == cli_hash(path), name
+            assert want and windows(path, count) == want, name
+    finally:
+        shutil.rmtree(tmp)
     print("ok")
 
 

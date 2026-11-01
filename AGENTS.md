@@ -38,8 +38,11 @@ source. The user docs at navidrome.org describe less than that README.
 
 ## Testing
 
-- `python3 sonic.py test` runs the self-check; it needs numpy and ffmpeg, and
-  the Docker build runs it too.
+- `python3 sonic.py test` runs the self-check; it needs numpy, ffmpeg and
+  `sonic-decode` next to `sonic.py` (built from `decode.c` against ffmpeg 8's
+  libraries, as in the Dockerfile), and the Docker build runs it too. It
+  compares `sonic-decode` byte for byte with the ffmpeg CLI, so an ffmpeg
+  update that changes its output fails the build.
 - There is no Go toolchain requirement on the host; the plugin builds in the
   Dockerfile's `plugin` stage.
 - End to end means a Navidrome with the plugin enabled, calling
