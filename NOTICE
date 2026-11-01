@@ -1,13 +1,13 @@
 MSD_musicnn_embedding.onnx
 
-The MusicNN embedding model, exported to ONNX by LMS
-(https://github.com/epoupon/lms, v3.81.0,
-src/libs/audio/models/MSD_musicnn_embedding.onnx). The LMS repository is
-GPL-3.0; the file carries no licence note of its own.
+The MusicNN embedding model, exported to ONNX (torch 2.11.0, opset 17) from
+oriyonay/musicnn-pytorch on Hugging Face
+(revision 394be17b3a5c2c2e1bb8a6593cfc3c5557eb8a82), Apache-2.0:
 
-The weights are those of oriyonay/musicnn-pytorch on Hugging Face
-(revision 394be17b3a5c2c2e1bb8a6593cfc3c5557eb8a82, weights/MSD_musicnn.pt),
-Apache-2.0, a PyTorch port of Jordi Pons's musicnn
+  weights/MSD_musicnn.pt  sha256 6db4c22908da50888d6a259d41980988d3b9cecc5f96fd725ede09166996dd00
+  musicnn_torch.py        sha256 2fecc5c0bd1369475f4bd4023b2f4c4581dc51795fa88c44b7061f8600d7f064
+
+The weights are a PyTorch port of Jordi Pons's musicnn
 (https://github.com/jordipons/musicnn), ISC licence, trained on the Million
 Song Dataset.
 
