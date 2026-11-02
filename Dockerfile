@@ -28,5 +28,7 @@ COPY MSD_musicnn_embedding.onnx /opt/sonic/
 COPY --from=plugin /sonic.ndp /opt/sonic/
 COPY --from=decode /sonic-decode /opt/sonic/
 COPY sonic.py /opt/sonic/
-RUN python3 /opt/sonic/sonic.py test
+# The self-check runs against the image's libraries but is not part of it.
+RUN --mount=type=bind,source=test_sonic.py,target=/tmp/test_sonic.py \
+    PYTHONPATH=/opt/sonic PYTHONDONTWRITEBYTECODE=1 python3 /tmp/test_sonic.py
 CMD ["sh", "-c", "cp /opt/sonic/sonic.ndp /plugins/ && exec python3 /opt/sonic/sonic.py"]

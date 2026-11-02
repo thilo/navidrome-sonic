@@ -38,7 +38,7 @@ source. The user docs at navidrome.org describe less than that README.
 
 ## Testing
 
-- `python3 sonic.py test` runs the self-check; it needs numpy, ffmpeg and
+- `python3 test_sonic.py` runs the self-check; it needs numpy, ffmpeg and
   `sonic-decode` next to `sonic.py` (built from `decode.c` against ffmpeg 8's
   libraries, as in the Dockerfile), and the Docker build runs it too. It
   compares `sonic-decode` byte for byte with the ffmpeg CLI, so an ffmpeg

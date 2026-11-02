@@ -132,12 +132,6 @@ static void put(int64_t pos, const float *s, int n)
         base = pos;
         len = 0;
     }
-    if (!len && pos < FFMAX(window(), 0)) {
-        drop = FFMIN(FFMAX(window(), 0) - pos, n);
-        s += drop;
-        n -= drop;
-        base = pos + drop;
-    }
     if (len + n > cap) {
         cap = FFMAX(2 * cap, len + n);
         if (!(buf = realloc(buf, cap * sizeof(*buf))))
@@ -145,20 +139,23 @@ static void put(int64_t pos, const float *s, int n)
     }
     memcpy(buf + len, s, n * sizeof(*buf));
     len += n;
-    while ((w = window()) + span <= base + len) {
-        int nz = FFMIN(w < 0 ? -w : 0, span);
+    for (;;) {
+        int nz;
 
-        if (base > w + nz)
-            fail("window starts before its segment", 0);
-        fwrite(zeros, sizeof(*zeros), nz, stdout);
-        fwrite(buf + (w + nz - base), sizeof(*buf), span - nz, stdout);
-        k++;
         drop = FFMIN(FFMAX(window(), 0) - base, len);
         if (drop > 0) {
             memmove(buf, buf + drop, (len - drop) * sizeof(*buf));
             base += drop;
             len -= drop;
         }
+        if ((w = window()) + span > base + len)
+            break;
+        nz = FFMIN(w < 0 ? -w : 0, span);
+        if (base > w + nz)
+            fail("window starts before its segment", 0);
+        fwrite(zeros, sizeof(*zeros), nz, stdout);
+        fwrite(buf + (w + nz - base), sizeof(*buf), span - nz, stdout);
+        k++;
     }
 }
 

@@ -140,7 +140,7 @@ Until a track is analysed, Instant Mix for it falls back to the agents after
 ## Test
 
 ```bash
-python3 sonic.py test
+python3 test_sonic.py
 ```
 
 The Docker build runs it too.
