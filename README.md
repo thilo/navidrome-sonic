@@ -29,7 +29,9 @@ Two parts, built into one image:
   [LMS](https://github.com/epoupon/lms) uses) and answers nearest-neighbour
   queries over HTTP. Embeddings live in SQLite under `/data`, each with a hash
   of the audio stream, which paths and tags don't affect. Runs on one thread
-  with Python, numpy, onnxruntime and ffmpeg.
+  with Python, numpy, onnxruntime and ffmpeg; `decode.c` reads the audio
+  through ffmpeg's libraries, decoding only around the analysed windows where
+  that gives the same samples.
 - `plugin/`, a Navidrome plugin (`sonic.ndp`) that implements the
   SonicSimilarity capability and the `GetSimilarSongsByTrack` metadata agent by
   asking the sidecar.
@@ -138,7 +140,7 @@ Until a track is analysed, Instant Mix for it falls back to the agents after
 ## Test
 
 ```bash
-python3 sonic.py test
+python3 test_sonic.py
 ```
 
 The Docker build runs it too.

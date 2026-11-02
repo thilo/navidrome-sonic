@@ -18,18 +18,14 @@ plugin without filesystem access. Files of equal size are told apart by the
 duration closest to `duration` (seconds), then by an exact `title`.
 
 Answers are SongRef-shaped (title, artists, album, MBIDs, duration) so Navidrome
-matches them to its own track IDs. `python3 sonic.py test` runs the self-check.
+matches them to its own track IDs. `python3 test_sonic.py` runs the self-check.
 """
 
-import io
 import json
 import os
 import random
-import shutil
 import sqlite3
 import subprocess
-import sys
-import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,6 +38,7 @@ import numpy as np  # noqa: E402
 MUSIC = "/music"
 DB = "/data/sonic.db"
 MODEL = "/opt/sonic/MSD_musicnn_embedding.onnx"
+DECODE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sonic-decode")  # built from decode.c
 PORT = 8000
 SCAN_INTERVAL = 3600
 REINDEX_EVERY = 200  # rebuild the index during a long first pass, not only at its end
@@ -83,12 +80,25 @@ POWER_SCALE = 1 / (np.sum(WIN ** 2) * N_FFT)
 FRAMES = np.arange(PATCH)[:, None] * HOP + np.arange(N_FFT)
 
 
-def patches(read, frame_count):
-    """Yield SPAN-sample windows of the zero-left-padded signal, laid out like LMS:
-    gap, patch, gap, patch, ... until the stream ends. frame_count 0 means unknown."""
+def frames(duration):
+    total = int(duration * SR)
+    return 1 + (total - N_FFT // 2) // HOP if total >= N_FFT // 2 else 0
+
+
+def layout(frame_count):
+    """Signal sample of the first window and the distance between windows, laid out like
+    LMS: gap, patch, gap, patch, ... frame_count 0 means unknown. The first window may
+    start at -HOP, in the zero padding."""
     n = min(MAX_PATCHES, frame_count // PATCH)
     gap = (frame_count - n * PATCH) // (n + 1) if n else (0 if frame_count else 2 * PATCH)
-    buf, base, start, eof = np.zeros(HOP, np.float32), 0, gap * HOP, False
+    return gap * HOP - HOP, (PATCH + gap) * HOP
+
+
+def patches(read, frame_count):
+    """Yield SPAN-sample windows of the zero-left-padded signal at layout(frame_count)
+    until the stream ends: what sonic-decode writes, as the self-check's reference."""
+    first, step = layout(frame_count)
+    buf, base, start, eof = np.zeros(HOP, np.float32), 0, first + HOP, False
     while True:
         while base + len(buf) < start + SPAN and not eof:
             chunk = read(1 << 18)
@@ -100,7 +110,7 @@ def patches(read, frame_count):
         if len(seg) < SPAN:
             return
         yield seg
-        start += (PATCH + gap) * HOP
+        start += step
 
 
 def log_mel(seg):
@@ -136,23 +146,22 @@ def probe(path):
 def audio_hash(path):
     """SHA-256 of the first audio stream's packets, copied without decoding: equal
     for a moved or retagged file, so its embedding can be reused."""
-    out = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-map", "0:a:0", "-c", "copy",
-                          "-f", "hash", "-hash", "sha256", "-"], capture_output=True, timeout=300, check=True).stdout
-    return out.decode().strip().split("=", 1)[1]
+    return subprocess.run([DECODE, "hash", path], capture_output=True, timeout=300, check=True).stdout.decode().strip()
 
 
 def embed(session, path, duration):
-    proc = subprocess.Popen(["ffmpeg", "-nostdin", "-v", "error", "-threads", "1", "-i", path,
-                             "-map", "0:a:0", "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    total = int(duration * SR)
-    frame_count = 1 + (total - N_FFT // 2) // HOP if total >= N_FFT // 2 else 0
+    first, step = layout(frames(duration))
+    proc = subprocess.Popen([DECODE, "windows", path, str(first), str(step), str(SPAN)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     vecs = []
     try:
-        for seg in patches(proc.stdout.read, frame_count):
-            mel, rms = log_mel(seg)
+        while len(seg := proc.stdout.read(SPAN * 4)) == SPAN * 4:
+            mel, rms = log_mel(np.frombuffer(seg, "<f4"))
             if rms >= MIN_PATCH_RMS:
                 vecs.append(session.run(None, {"mel_patch": mel[None]})[0][0])
+        # Its stderr is at most one line, so reading it after stdout cannot block.
+        if proc.wait():
+            raise RuntimeError(f"sonic-decode: {proc.stderr.read().decode().strip()}")
     finally:
         proc.kill()
         proc.wait()
@@ -411,91 +420,5 @@ def main():
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
-# ---------------------------------------------------------------------- test --
-
-def test():
-    # Patch layout: 100 s known -> 20 patches with equal gaps; unknown -> gap of 2 patches.
-    sig = np.random.default_rng(0).standard_normal(SR * 100).astype(np.float32)
-    frames = 1 + (len(sig) - N_FFT // 2) // HOP
-    segs = list(patches(io.BytesIO(sig.tobytes()).read, frames))
-    assert len(segs) == 20, len(segs)
-    gap = (frames - 20 * PATCH) // 21
-    first = gap * HOP - HOP  # padded index -> signal index
-    assert np.array_equal(segs[0], sig[first:first + SPAN])
-    unknown = list(patches(io.BytesIO(sig.tobytes()).read, 0))
-    assert np.array_equal(unknown[1], sig[(5 * PATCH - 1) * HOP:(5 * PATCH - 1) * HOP + SPAN])
-    mel, rms = log_mel(segs[0])
-    assert mel.shape == (PATCH, MELS) and rms > MIN_PATCH_RMS
-    assert abs(FB.sum(axis=1) - 1).max() < 1e-5
-
-    # Ranking: a same-artist neighbour loses to a slightly farther other artist.
-    def row(path, artist, vec, size=None, seconds=0, name=None):
-        song = {"name": name or path, "artists": [{"name": artist}], "album": name or path, "mbid": "",
-                "durationMs": seconds * 1000}
-        return (path, json.dumps({"song": song, "albumArtist": artist}), np.asarray(vec, np.float32).tobytes(),
-                size if size is not None else hash(path))
-    rng = np.random.default_rng(1)
-    base = rng.standard_normal(200)
-    rows = [row("seed", "A", base), row("same", "A", base + 0.01 * rng.standard_normal(200)),
-            row("other", "B", base + 0.02 * rng.standard_normal(200))]
-    rows += [row(f"far{i}", f"F{i}", rng.standard_normal(200)) for i in range(80)]
-    # Size lookup: three files of one size, told apart by duration, then title.
-    rows += [row(name, "C", rng.standard_normal(200), 1000, s) for name, s in (("x", 100), ("y", 200), ("z", 200))]
-    # The seed's file again in another library: never offered as similar to itself.
-    rows += [row("seed-copy", "A", base, name="seed")]
-    assert Index(rows[:2]).by_size == {}
-    idx = Index(rows)
-    assert idx.paths[idx.find("1000", "199.4", "z")] == "z"
-    assert idx.paths[idx.find(1000, 120)] == "x"
-    assert idx.paths[idx.find(1000, 200, "y")] == "y"
-    assert idx.paths[idx.find(hash("seed"))] == "seed"
-    try:
-        idx.find(1)
-        raise AssertionError("unknown size found")
-    except KeyError:
-        pass
-    picks = [idx.paths[c] for c, _ in idx.similar(0, 2)]
-    assert picks == ["other", "same"], picks
-    route = [idx.paths[c] for c, _ in idx.route(0, 3, 4)]
-    assert route[0] == "seed" and route[-1] == "far0" and len(set(route)) == len(route), route
-
-    # Scan: a moved file and a retagged one keep their embeddings, and rows from
-    # before the audio column get a hash without being analysed again.
-    global MUSIC
-    class Session:
-        runs = 0
-        def run(self, _, feeds):
-            Session.runs += 1
-            return [np.full((1, 200), feeds["mel_patch"].mean(), np.float32)]
-    def ffmpeg(*args):
-        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", *args], check=True)
-    music, MUSIC = MUSIC, tempfile.mkdtemp()
-    try:
-        ffmpeg("-f", "lavfi", "-i", "sine=f=440:d=5", "-metadata", "title=A", f"{MUSIC}/a.mp3")
-        ffmpeg("-f", "lavfi", "-i", "sine=f=660:d=5", "-metadata", "title=B", f"{MUSIC}/b.mp3")
-        db = sqlite3.connect(":memory:")
-        init_db(db)
-        scan(db, Session())
-        before = dict(db.execute("SELECT audio, emb FROM track"))
-        assert Session.runs == 2 and len(before) == 2 and None not in before.values(), Session.runs
-        os.makedirs(f"{MUSIC}/moved")
-        os.rename(f"{MUSIC}/a.mp3", f"{MUSIC}/moved/a.mp3")
-        ffmpeg("-i", f"{MUSIC}/b.mp3", "-c", "copy", "-metadata", "title=B2", f"{MUSIC}/b2.mp3")
-        os.replace(f"{MUSIC}/b2.mp3", f"{MUSIC}/b.mp3")
-        os.utime(f"{MUSIC}/b.mp3", (0, 0))
-        scan(db, Session())
-        rows = {os.path.relpath(p, MUSIC): (json.loads(m)["song"]["name"], a, e)
-                for p, m, a, e in db.execute("SELECT path, meta, audio, emb FROM track")}
-        assert Session.runs == 2 and sorted(rows) == ["b.mp3", "moved/a.mp3"], (Session.runs, sorted(rows))
-        assert rows["b.mp3"][0] == "B2" and all(before[a] == e for _, a, e in rows.values())
-        db.execute("UPDATE track SET audio = NULL")
-        assert not scan(db, Session()) and Session.runs == 2
-        assert dict(db.execute("SELECT audio, emb FROM track")) == before
-    finally:
-        shutil.rmtree(MUSIC)
-        MUSIC = music
-    print("ok")
-
-
 if __name__ == "__main__":
-    test() if sys.argv[1:] == ["test"] else main()
+    main()
