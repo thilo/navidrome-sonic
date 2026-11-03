@@ -19,16 +19,20 @@ speculative configuration: no options, env vars or endpoints without a caller.
   changes elsewhere must leave the hash alone. Check with two builds of the
   `plugin` stage, one with `--no-cache`, and compare
   `sha256sum /sonic.ndp`.
-- **The analysis and ranking follow LMS.** The front-end and ranking constants
-  in `sonic.py` reproduce LMS's MusicNN pipeline so its embeddings match. Don't
-  tune them; a deliberate departure gets a comment saying how and why it
-  differs (see the whitening shrinkage in `Index`).
+- **The front end follows Essentia; patch selection and ranking follow LMS.**
+  The front end in `analysis.py` reproduces Essentia's `TensorflowInputMusiCNN`,
+  which EffNet and its heads were trained on (`test_sonic.py` checks it against
+  values from Essentia); `layout()` and the patch and ranking constants
+  reproduce LMS's. Don't tune them; a deliberate departure gets a comment saying
+  how and why it differs (see the whitening shrinkage in `index.py`).
 - **Navidrome does the per-user filtering.** The plugin is not told who asks;
   Navidrome matches the returned tags within the caller's libraries. Don't
   filter by user or library in the plugin or the sidecar.
-- **The model file is vendored.** `MSD_musicnn_embedding.onnx` is a plain file
-  in git; its origin and checksum are in `NOTICE`. Replacing it changes every
-  embedding, so the sidecar's database has to be rebuilt.
+- **The models are vendored.** `models/` holds plain files in git; their
+  origin, licence and checksums are in `NOTICE`, and `convert-effnet.sh`
+  rebuilds `discogs-effnet.onnx` from Essentia's TensorFlow graph. A change to
+  a model or the analysis bumps `ANALYSIS_VERSION` in `sonic.py`, which makes
+  the sidecar drop and rebuild its database.
 
 ## References
 
@@ -39,7 +43,7 @@ source. The user docs at navidrome.org describe less than that README.
 ## Testing
 
 - `python3 test_sonic.py` runs the self-check; it needs numpy, ffmpeg and
-  `sonic-decode` next to `sonic.py` (built from `decode.c` against ffmpeg 8's
+  `sonic-decode` next to the Python files (built from `decode.c` against ffmpeg 8's
   libraries, as in the Dockerfile), and the Docker build runs it too. It
   compares `sonic-decode` byte for byte with the ffmpeg CLI, so an ffmpeg
   update that changes its output fails the build.

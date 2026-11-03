@@ -3,18 +3,21 @@
 Audio-similarity recommendations for [Navidrome](https://www.navidrome.org/):
 Instant Mix in the web UI, `getSimilarSongs2`, and the OpenSubsonic
 `getSonicSimilarTracks` / `findSonicPath` calls, ranked by what the tracks sound
-like.
+like, and six mood playlists per user, refreshed weekly.
 
 ## Features
 
 - Similar tracks and Instant Mix from the audio itself, not from tags or play
   history.
+- Mood playlists: "Happy Mix", "Sad Mix", "Relaxed Mix", "Aggressive Mix",
+  "Party Mix" and "Dance Mix" for every user, 30 tracks each, drawn from the
+  user's libraries and replaced every Monday.
 - Independent of file paths: the plugin needs no filesystem access, and
   Navidrome and the sidecar may mount the library at different paths (see
   [Track lookup](#track-lookup)).
 - Each file's audio is analysed once. A moved, renamed or retagged file keeps
-  its embedding, and the same file in several libraries is analysed once and
-  offered once.
+  its embedding and mood scores, and the same file in several libraries is
+  analysed once and offered once.
 - Results per user: each user gets tracks from the libraries they can open,
   shared libraries included (see
   [Several libraries and users](#several-libraries-and-users)).
@@ -24,17 +27,23 @@ like.
 
 Two parts, built into one image:
 
-- `sonic.py`, a sidecar that walks the music library once an hour, computes a
-  MusicNN embedding for every file with new audio (the model and analysis
-  [LMS](https://github.com/epoupon/lms) uses) and answers nearest-neighbour
-  queries over HTTP. Embeddings live in SQLite under `/data`, each with a hash
-  of the audio stream, which paths and tags don't affect. Runs on one thread
-  with Python, numpy, onnxruntime and ffmpeg; `decode.c` reads the audio
-  through ffmpeg's libraries, decoding only around the analysed windows where
-  that gives the same samples.
+- a Python sidecar that walks the music library once an hour, computes a
+  [Discogs-EffNet](https://essentia.upf.edu/models.html) embedding and
+  Essentia's six mood scores for every file with new audio, and answers
+  nearest-neighbour and mood queries over HTTP; patch selection and ranking
+  follow [LMS](https://github.com/epoupon/lms). Embeddings live in SQLite under
+  `/data`, each with a hash of the audio stream, which paths and tags don't
+  affect. Runs on one thread with Python, numpy, onnxruntime and ffmpeg:
+  `sonic.py` holds the scan and the HTTP API, `analysis.py` the front end and
+  models, `index.py` the ranking. `decode.c` reads the audio through ffmpeg's
+  libraries, decoding only around the analysed windows where that gives the
+  same samples.
 - `plugin/`, a Navidrome plugin (`sonic.ndp`) that implements the
   SonicSimilarity capability and the `GetSimilarSongsByTrack` metadata agent by
-  asking the sidecar.
+  asking the sidecar, and writes the mood playlists: five minutes after it
+  loads and every Monday at 04:00, it takes each user's 150 highest-scoring
+  tracks per mood and replaces the playlist's songs with 30 of them, picked at
+  random. Only playlists the plugin created are touched.
 
 On start the container copies `sonic.ndp` into `/plugins`, which Navidrome
 mounts as its plugin folder.
@@ -52,7 +61,8 @@ files of equal size and then an exact title. Answers go back as tags (title,
 artists, album, MBIDs, duration), which Navidrome matches to its own tracks.
 
 The manifest requests `matcher` for that lookup, `library` because Navidrome
-requires it alongside `matcher`, and `http` for the sidecar. It does not request
+requires it alongside `matcher`, `http` for the sidecar, and `users`,
+`subsonicapi` and `scheduler` for the mood playlists. It does not request
 `library.filesystem`: the lookup works without it, and with it Navidrome would
 also give the plugin track paths and read access to every library file.
 
@@ -122,11 +132,11 @@ return at most the requested count before that filtering.
 
 Navidrome loads a new plugin disabled. Enable it once after the first start,
 and again whenever `sonic.ndp` changes, which Navidrome detects by its hash.
-The plugin looks up the seed track in the libraries it is granted, so grant it
-all of them:
+The plugin looks up the seed track in the libraries it is granted and writes
+playlists for the users it is granted, so grant it all of both:
 
 ```bash
-docker compose exec navidrome navidrome plugin edit sonic --all-libraries
+docker compose exec navidrome navidrome plugin edit sonic --all-libraries --all-users
 docker compose exec navidrome navidrome plugin enable sonic
 docker compose restart navidrome
 ```
@@ -135,7 +145,7 @@ The package is built reproducibly, so rebuilding the image without plugin
 changes keeps it enabled.
 
 Until a track is analysed, Instant Mix for it falls back to the agents after
-`sonic` in `ND_AGENTS`.
+`sonic` in `ND_AGENTS`, and it is missing from the mood playlists.
 
 ## Test
 
@@ -148,4 +158,5 @@ The Docker build runs it too.
 ## License
 
 GPL-3.0 (see [LICENSE](LICENSE)); the plugin links Navidrome's GPL-3.0 PDK.
-The bundled model file has its own origin, see [NOTICE](NOTICE).
+The models in `models/` are Essentia's, licensed CC BY-NC-SA 4.0, which rules
+out commercial use; see [NOTICE](NOTICE).
