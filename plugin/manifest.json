@@ -1,8 +1,8 @@
 {
   "name": "Sonic similarity",
   "author": "Thilo Utke",
-  "version": "0.1.0",
-  "description": "Similar tracks and Instant Mix from MusicNN audio embeddings computed by the navidrome-sonic sidecar",
+  "version": "0.2.0",
+  "description": "Similar tracks, Instant Mix and weekly mood playlists from audio analysis by the navidrome-sonic sidecar",
   "permissions": {
     "http": {
       "reason": "Query the navidrome-sonic sidecar, a private address on the Docker network",
@@ -14,10 +14,19 @@
       ]
     },
     "matcher": {
-      "reason": "Resolve a track ID to the file size, duration and title the sidecar looks it up by"
+      "reason": "Resolve a track ID to the file size, duration and title the sidecar looks it up by, and mood results to the tracks a user can open"
     },
     "library": {
       "reason": "Navidrome requires it for the matcher; no filesystem access"
+    },
+    "users": {
+      "reason": "Build mood playlists for each user the plugin is granted, from the libraries that user can open"
+    },
+    "subsonicapi": {
+      "reason": "Find, create and refill each user's mood playlists"
+    },
+    "scheduler": {
+      "reason": "Refresh the mood playlists weekly"
     }
   }
 }
