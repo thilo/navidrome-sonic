@@ -88,7 +88,9 @@ services:
         condition: service_healthy
 
   navidrome-sonic:
-    build: https://github.com/thilo/navidrome-sonic.git#v0.4.1
+    # Replace vX.Y.Z with the latest tag from
+    # https://github.com/thilo/navidrome-sonic/releases
+    build: https://github.com/thilo/navidrome-sonic.git#vX.Y.Z
     init: true
     # Must be able to read the music files.
     user: "1000:1000"
