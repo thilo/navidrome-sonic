@@ -1,5 +1,5 @@
 /*
- * sonic-decode: reads audio for sonic.py through the image's libav* libraries, in one thread,
+ * sonic-decode: reads audio for the sidecar through the image's libav* libraries, in one thread,
  * instead of running the ffmpeg CLI, which hands every frame between its threads.
  *
  *   sonic-decode hash FILE

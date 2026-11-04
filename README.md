@@ -27,15 +27,15 @@ like, and six mood playlists per user, refreshed weekly.
 
 Two parts, built into one image:
 
-- a Python sidecar that walks the music library once an hour, computes a
+- a Go sidecar that walks the music library once an hour, computes a
   [Discogs-EffNet](https://essentia.upf.edu/models.html) embedding and
   Essentia's six mood scores for every file with new audio, and answers
   nearest-neighbour and mood queries over HTTP; patch selection and ranking
   follow [LMS](https://github.com/epoupon/lms). Embeddings live in SQLite under
   `/data`, each with a hash of the audio stream, which paths and tags don't
-  affect. Runs on one thread with Python, numpy, onnxruntime and ffmpeg:
-  `sonic.py` holds the scan and the HTTP API, `analysis.py` the front end and
-  models, `index.py` the ranking. `decode.c` reads the audio through ffmpeg's
+  affect. Runs on one thread with onnxruntime and ffmpeg: in `sidecar/`,
+  `sonic.go` holds the scan and the HTTP API, `analysis.go` the front end and
+  models, `index.go` the ranking. `decode.c` reads the audio through ffmpeg's
   libraries, decoding only around the analysed windows where that gives the
   same samples.
 - `plugin/`, a Navidrome plugin (`sonic.ndp`) that implements the
@@ -98,7 +98,7 @@ services:
       - navidrome_plugins:/plugins
     networks: [sonic]
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://127.0.0.1:8000/health"]
       interval: 30s
 
 networks:
@@ -150,10 +150,10 @@ Until a track is analysed, Instant Mix for it falls back to the agents after
 ## Test
 
 ```bash
-python3 test_sonic.py
+cd sidecar && go test
 ```
 
-The Docker build runs it too.
+It needs ffmpeg and `sonic-decode` in `sidecar/`; the Docker build runs it too.
 
 ## License
 
