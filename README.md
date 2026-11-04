@@ -92,6 +92,11 @@ services:
     # https://github.com/thilo/navidrome-sonic/releases
     build: https://github.com/thilo/navidrome-sonic.git#vX.Y.Z
     init: true
+    # Analysis runs on one thread; the limits leave room above the peaks
+    # under Benchmarks.
+    cpus: 1
+    mem_limit: 128m
+    pids_limit: 32
     # Must be able to read the music files.
     user: "1000:1000"
     volumes:
@@ -156,6 +161,30 @@ cd sidecar && go test
 ```
 
 It needs ffmpeg and `sonic-decode` in `sidecar/`; the Docker build runs it too.
+
+## Benchmarks
+
+On a 2-core x86 server (AVX-512, no VNNI) shared with other services.
+
+**The sidecar** (0.4.0), library of about 7,000 tracks:
+
+| | |
+|---|---|
+| Memory peak, building the index at startup | 76 MiB |
+| Memory, idle | 44 MiB |
+| Processes and threads | 13 |
+| Analysing the whole library | about 25 tracks a minute (measured on 0.3.0, which uses about the same CPU per track) |
+
+**Embedding models**, model CPU per track on up to 20 patches (MAEST: 8), one
+thread, decoding excluded:
+
+| Model | Used by | CPU per track | Memory peak |
+|---|---|---|---|
+| Discogs-EffNet | navidrome-sonic 0.3.0 and later | 0.30 s, plus 0.14 s mel | – |
+| MusicNN | LMS, navidrome-sonic 0.1–0.2 | 1.2 s | 112 MiB |
+| MAEST 30 s | maestro | 69 s | 811 MiB |
+
+EffNet's mood heads run on the stored embedding, so moods cost no second pass.
 
 ## License
 
