@@ -27,7 +27,6 @@ import (
 	"errors"
 	"io/fs"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -121,10 +120,7 @@ func analyse(db *sql.DB, models map[string]model, path string) (meta, emb, mood 
 	if err != nil || vec == nil {
 		return meta, nil, nil, audio, true, err
 	}
-	b := make([]byte, 4*len(vec))
-	for i, x := range vec {
-		binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(x))
-	}
+	b, _ := binary.Append(nil, binary.LittleEndian, vec)
 	j, _ := json.Marshal(scores)
 	return meta, b, string(j), audio, true, nil
 }

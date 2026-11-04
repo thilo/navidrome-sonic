@@ -26,12 +26,13 @@ import (
 	"math"
 	"math/rand"
 	"slices"
-	"sort"
 	"strings"
 
 	"gonum.org/v1/gonum/blas"
+	"gonum.org/v1/gonum/floats"
 	"gonum.org/v1/gonum/lapack/gonum"
 	"gonum.org/v1/gonum/mat"
+	"gonum.org/v1/gonum/stat"
 )
 
 // Ranking, as in LMS's AudioSimilarityEngine.
@@ -83,6 +84,12 @@ func (t *track) in(taken map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+func (t *track) take(taken map[string]bool) {
+	for _, k := range t.keys {
+		taken[k] = true
+	}
 }
 
 // rows is one query's view of the track table: a track's parsed tags by index
@@ -172,9 +179,7 @@ func (idx *Index) build(tx *sql.Tx) error {
 				return err
 			}
 			e := make([]float32, len(b)/4)
-			for j := range e {
-				e[j] = math.Float32frombits(binary.LittleEndian.Uint32(b[4*j:]))
-			}
+			binary.Decode(b, binary.LittleEndian, e)
 			f(i, e)
 		}
 		return res.Err()
@@ -274,14 +279,8 @@ func (idx *Index) build(tx *sql.Tx) error {
 			}
 		}
 	}
-	m, sd := 0.0, 0.0
-	for _, d := range nn {
-		m += d / float64(len(nn))
-	}
-	for _, d := range nn {
-		sd += (d - m) * (d - m) / float64(len(nn)-1)
-	}
-	idx.threshold = m + 2*math.Sqrt(sd)
+	m, sd := stat.MeanStdDev(nn, nil)
+	idx.threshold = m + 2*sd
 	idx.paths = paths
 	for i, p := range paths {
 		idx.pos[p] = i
@@ -445,10 +444,7 @@ func (idx *Index) at(c int) []float32 { return idx.vec[c*dims : (c+1)*dims] }
 
 func argsort(d []float64) []int {
 	order := make([]int, len(d))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return d[order[a]] < d[order[b]] })
+	floats.ArgsortStable(slices.Clone(d), order)
 	return order
 }
 
@@ -503,9 +499,7 @@ func (idx *Index) similar(seed, count int) ([]match, error) {
 		}
 	}
 	chosen, out, taken := []int{seed}, []match{}, map[string]bool{}
-	for _, k := range r.get(seed).keys {
-		taken[k] = true
-	}
+	r.get(seed).take(taken)
 	for len(out) < count {
 		var left []int
 		for _, c := range ranked {
@@ -519,9 +513,7 @@ func (idx *Index) similar(seed, count int) ([]match, error) {
 		smooth := idx.dist(idx.at(chosen[len(chosen)-1]))
 		b := best(ranked, func(c int) float64 { return penalty(r, c, chosen, smooth, d[c]) })
 		chosen = append(chosen, b)
-		for _, k := range r.get(b).keys {
-			taken[k] = true
-		}
+		r.get(b).take(taken)
 		out = append(out, match{r.get(b).song, 1 - d[b]})
 	}
 	return out, nil
@@ -545,9 +537,7 @@ func (idx *Index) mood(name string, count int) ([]match, error) {
 		}
 		if t := parse(meta); !t.in(taken) {
 			out = append(out, match{t.song, score.Float64})
-			for _, k := range t.keys {
-				taken[k] = true
-			}
+			t.take(taken)
 		}
 	}
 	return out, res.Err()
@@ -577,9 +567,7 @@ func (idx *Index) route(start, end, count int) ([]match, error) {
 		fit, smooth := idx.dist(idx.at(near[0])), idx.dist(idx.at(chosen[len(chosen)-1]))
 		taken := map[string]bool{}
 		for _, c := range append(chosen, end) {
-			for _, k := range r.get(c).keys {
-				taken[k] = true
-			}
+			r.get(c).take(taken)
 		}
 		var ok []int
 		for _, c := range near {

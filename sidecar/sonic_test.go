@@ -25,19 +25,8 @@ import (
 func init() { decodeBin, _ = filepath.Abs("sonic-decode") }
 
 func f32bytes(s []float32) []byte {
-	b := make([]byte, 4*len(s))
-	for i, x := range s {
-		binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(x))
-	}
+	b, _ := binary.Append(nil, binary.LittleEndian, s)
 	return b
-}
-
-func floats(b []byte) []float32 {
-	s := make([]float32, len(b)/4)
-	for i := range s {
-		s[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[4*i:]))
-	}
-	return s
 }
 
 // patches returns the span-sample windows of the zero-left-padded f32le signal at
@@ -99,7 +88,9 @@ func TestFrontEnd(t *testing.T) {
 	if unknown := patches(pcm, 0); !bytes.Equal(unknown[1], pcm[4*at:4*(at+span)]) {
 		t.Fatal("unknown duration")
 	}
-	mel, rms := logMel(floats(segs[0]))
+	seg := make([]float32, span)
+	binary.Decode(segs[0], binary.LittleEndian, seg)
+	mel, rms := logMel(seg)
 	if len(mel) != patch*mels || rms <= minPatchRMS {
 		t.Fatal(len(mel), rms)
 	}

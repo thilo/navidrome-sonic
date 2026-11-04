@@ -345,9 +345,7 @@ func embed(models map[string]model, path string, duration float64) ([]float32, m
 		if _, err := io.ReadFull(stdout, buf); err != nil {
 			break
 		}
-		for i := range seg {
-			seg[i] = math.Float32frombits(binary.LittleEndian.Uint32(buf[4*i:]))
-		}
+		binary.Decode(buf, binary.LittleEndian, seg)
 		mel, rms := logMel(seg)
 		if rms < minPatchRMS {
 			continue
