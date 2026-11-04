@@ -20,18 +20,18 @@ speculative configuration: no options, env vars or endpoints without a caller.
   `plugin` stage, one with `--no-cache`, and compare
   `sha256sum /sonic.ndp`.
 - **The front end follows Essentia; patch selection and ranking follow LMS.**
-  The front end in `analysis.py` reproduces Essentia's `TensorflowInputMusiCNN`,
-  which EffNet and its heads were trained on (`test_sonic.py` checks it against
+  The front end in `sidecar/analysis.go` reproduces Essentia's `TensorflowInputMusiCNN`,
+  which EffNet and its heads were trained on (`sonic_test.go` checks it against
   values from Essentia); `layout()` and the patch and ranking constants
   reproduce LMS's. Don't tune them; a deliberate departure gets a comment saying
-  how and why it differs (see the whitening shrinkage in `index.py`).
+  how and why it differs (see the whitening shrinkage in `index.go`).
 - **Navidrome does the per-user filtering.** The plugin is not told who asks;
   Navidrome matches the returned tags within the caller's libraries. Don't
   filter by user or library in the plugin or the sidecar.
 - **The models are vendored.** `models/` holds plain files in git; their
   origin, licence and checksums are in `NOTICE`, and `convert-effnet.sh`
   rebuilds `discogs-effnet.onnx` from Essentia's TensorFlow graph. A change to
-  a model or the analysis bumps `ANALYSIS_VERSION` in `sonic.py`, which makes
+  a model or the analysis bumps `analysisVersion` in `sonic.go`, which makes
   the sidecar drop and rebuild its database.
 
 ## References
@@ -42,13 +42,13 @@ source. The user docs at navidrome.org describe less than that README.
 
 ## Testing
 
-- `python3 test_sonic.py` runs the self-check; it needs numpy, ffmpeg and
-  `sonic-decode` next to the Python files (built from `decode.c` against ffmpeg 8's
+- `go test` in `sidecar/` runs the self-check; it needs ffmpeg and
+  `sonic-decode` in that directory (built from `decode.c` against ffmpeg 8's
   libraries, as in the Dockerfile), and the Docker build runs it too. It
   compares `sonic-decode` byte for byte with the ffmpeg CLI, so an ffmpeg
   update that changes its output fails the build.
 - There is no Go toolchain requirement on the host; the plugin builds in the
-  Dockerfile's `plugin` stage.
+  Dockerfile's `plugin` stage, the sidecar in its `sidecar` stage.
 - End to end means a Navidrome with the plugin enabled, calling
   `getSonicSimilarTracks`, `getSimilarSongs2` and `findSonicPath`; for
   library-scoping changes, with two users who can open different libraries.

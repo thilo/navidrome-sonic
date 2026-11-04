@@ -12,22 +12,25 @@ RUN GOOS=wasip1 GOARCH=wasm go build -trimpath -buildmode=c-shared -o plugin.was
  && touch -t 198001010000 manifest.json plugin.wasm \
  && zip -X -j /sonic.ndp manifest.json plugin.wasm
 
-# sonic-decode, linked against the ffmpeg libraries of the same Alpine release as the
-# runtime stage.
-FROM alpine:3.24 AS decode
-RUN apk add --no-cache build-base ffmpeg-dev
-COPY decode.c /src/
-RUN cc -O2 -Wall -o /sonic-decode /src/decode.c \
-    $(pkg-config --cflags --libs libavformat libavcodec libavfilter libavutil)
+# The sidecar and sonic-decode, linked against the libraries of the same Alpine
+# release as the runtime stage. The self-check runs against those libraries but
+# is not part of the image.
+FROM alpine:3.24 AS sidecar
+RUN apk add --no-cache build-base ffmpeg ffmpeg-dev go
+WORKDIR /src
+COPY sidecar/go.mod sidecar/go.sum ./
+RUN go mod download
+COPY sidecar/*.go ./
+RUN --mount=type=bind,source=decode.c,target=/tmp/decode.c \
+    cc -O2 -Wall -o sonic-decode /tmp/decode.c \
+    $(pkg-config --cflags --libs libavformat libavcodec libavfilter libavutil) \
+ && go build -trimpath -o sonic . \
+ && go test .
 
 FROM alpine:3.24
-RUN apk add --no-cache python3 py3-numpy py3-onnxruntime ffmpeg
+RUN apk add --no-cache ffmpeg onnxruntime
 # EffNet and its mood heads; see NOTICE for their origin and licence.
 COPY models/ /opt/sonic/models/
 COPY --from=plugin /sonic.ndp /opt/sonic/
-COPY --from=decode /sonic-decode /opt/sonic/
-COPY sonic.py analysis.py index.py /opt/sonic/
-# The self-check runs against the image's libraries but is not part of it.
-RUN --mount=type=bind,source=test_sonic.py,target=/tmp/test_sonic.py \
-    PYTHONPATH=/opt/sonic PYTHONDONTWRITEBYTECODE=1 python3 /tmp/test_sonic.py
-CMD ["sh", "-c", "cp /opt/sonic/sonic.ndp /plugins/ && exec python3 /opt/sonic/sonic.py"]
+COPY --from=sidecar /src/sonic /src/sonic-decode /opt/sonic/
+CMD ["sh", "-c", "cp /opt/sonic/sonic.ndp /plugins/ && exec /opt/sonic/sonic"]
