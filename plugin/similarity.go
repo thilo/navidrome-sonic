@@ -1,12 +1,11 @@
-// Sonic similarity: similar tracks, sonic paths and Instant Mix.
+// Similar tracks: the OpenSubsonic getSonicSimilarTracks and findSonicPath
+// calls, and Instant Mix and getSimilarSongs2 through the metadata agent.
 //
-// The sidecar knows tracks by file, Navidrome by its own ID. A seed goes out as
-// the file size, with duration and title to tell apart files of equal size: the
-// Matcher service resolves the ID to a track, which carries all three without
-// filesystem access. The match runs unscoped, within the libraries the plugin is
-// granted; Navidrome has already checked that the caller can see the seed.
-// Results come back as tags (title, artists, album, MBIDs, duration), which
-// Navidrome matches to its own tracks within the caller's libraries.
+// Navidrome knows a track by its ID, the sidecar by its file. seed resolves
+// the ID with the Matcher service, which returns the file size, duration and
+// title without filesystem access, and sends those. The match is not scoped to
+// a user: Navidrome has already checked that the caller can see the seed, and
+// it filters the answer to the caller's libraries itself.
 package main
 
 import (

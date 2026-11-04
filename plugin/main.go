@@ -1,7 +1,6 @@
-// Navidrome plugin that answers sonic-similarity requests, Instant Mix
-// (getSimilarSongs2) and weekly mood playlists from the navidrome-sonic sidecar.
-// This file registers the plugin and holds the sidecar client; similarity.go
-// serves the similarity requests, moods.go the playlists.
+// Navidrome plugin for the navidrome-sonic sidecar: similar tracks and Instant
+// Mix in similarity.go, weekly mood playlists in moods.go. This file registers
+// the plugin and holds the sidecar client.
 package main
 
 import (
@@ -30,6 +29,8 @@ func init() {
 
 func main() {}
 
+// query calls a sidecar endpoint. Every endpoint answers in the shape of a
+// SonicSimilarityResponse, /mood included, so one decoder serves all.
 func query(endpoint string, params url.Values) (sonicsimilarity.SonicSimilarityResponse, error) {
 	var out sonicsimilarity.SonicSimilarityResponse
 	resp, err := host.HTTPSend(host.HTTPRequest{Method: "GET", URL: sidecar + endpoint + "?" + params.Encode(), TimeoutMs: 10000})

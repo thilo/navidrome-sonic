@@ -2,8 +2,8 @@
 // user the plugin is granted gets six playlists ("Happy Mix" and so on): 30
 // tracks drawn at random from the 150 the sidecar scores highest for that mood
 // among the tracks in the libraries that user can open. A playlist is found again
-// by owner, name and the comment marker, and its tracks are replaced; renaming or
-// editing the comment detaches it.
+// by owner, name and the comment "navidrome-sonic", and its tracks are replaced;
+// renaming it or editing the comment detaches it.
 package main
 
 import (
@@ -80,7 +80,9 @@ func (plugin) OnCallback(req scheduler.SchedulerCallbackRequest) error {
 	return errors.Join(errs...)
 }
 
-// refreshMood replaces the tracks of user's playlist for mood, creating it if needed.
+// refreshMood replaces the tracks of user's playlist for mood, creating it if
+// needed. It asks the sidecar for twice the pool: tracks in libraries the user
+// cannot open, and copies that match the same track, drop out in the match.
 func refreshMood(user, mood, name string) error {
 	res, err := query("/mood", url.Values{"name": {mood}, "count": {strconv.Itoa(2 * moodPool)}})
 	if err != nil {
@@ -117,6 +119,7 @@ func refreshMood(user, mood, name string) error {
 	}
 	for _, p := range lists.Playlists.Playlist {
 		if p.Owner == user && p.Name == name && p.Comment == moodMarker {
+			// createPlaylist with a playlistId replaces that playlist's songs.
 			params.Set("playlistId", p.ID)
 			return subsonic("createPlaylist?"+params.Encode(), nil)
 		}
@@ -126,6 +129,7 @@ func refreshMood(user, mood, name string) error {
 	if err := subsonic("createPlaylist?"+params.Encode(), &created); err != nil {
 		return err
 	}
+	// createPlaylist takes no comment, so the marker is set afterwards.
 	return subsonic("updatePlaylist?"+url.Values{"u": {user}, "playlistId": {created.Playlist.ID}, "comment": {moodMarker}}.Encode(), nil)
 }
 
