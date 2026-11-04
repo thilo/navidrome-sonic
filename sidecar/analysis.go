@@ -69,6 +69,21 @@ var (
 		return
 	}()
 	fft = fourier.NewFFT(nFFT)
+	// The bins each mel band covers; outside them its weights are zero, so
+	// skipping them leaves the sums bit for bit unchanged.
+	fbBins = func() (r [mels][2]int) {
+		for m, band := range fb {
+			lo, hi := 0, len(band)
+			for lo < hi && band[lo] == 0 {
+				lo++
+			}
+			for hi > lo && band[hi-1] == 0 {
+				hi--
+			}
+			r[m] = [2]int{lo, hi}
+		}
+		return
+	}()
 )
 
 // melFilterbank returns Essentia's MelBands as TensorflowInputMusiCNN sets them: Slaney
@@ -148,8 +163,9 @@ func logMel(seg []float32) ([]float32, float64) {
 		}
 		for m := range mels {
 			s := 0.0
-			for k, w := range fb[m] {
-				s += power[k] * float64(w)
+			lo, hi := fbBins[m][0], fbBins[m][1]
+			for k, w := range fb[m][lo:hi] {
+				s += power[lo+k] * float64(w)
 			}
 			out[t*mels+m] = float32(math.Log10(10000*s + 1))
 		}
