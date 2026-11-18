@@ -9,7 +9,7 @@
 //
 //	GET /similar?size=&duration=&title=&count=N    tracks closest to one track
 //	GET /path?start_size=&...&end_size=&...&count=N a route from one track to another
-//	GET /mood?name=&count=N                        tracks with the highest score for a mood
+//	GET /mood?name=&min=&seed=&page=&count=N       a shuffled page of the tracks scoring at least min (default 0.8) for a mood
 //	GET /health                                    index size, for the healthcheck
 //
 // Navidrome and the sidecar share no track IDs. A track is looked up by its
@@ -317,10 +317,16 @@ func handle(w http.ResponseWriter, r *http.Request) {
 		for _, m := range moods {
 			names = append(names, m.name)
 		}
-		if slices.Contains(names, q.Get("name")) {
-			res, err = idx.mood(q.Get("name"), count)
-		} else {
+		floor, errMin := 0.8, error(nil)
+		if q.Has("min") {
+			floor, errMin = strconv.ParseFloat(q.Get("min"), 64)
+		}
+		shuffle, errSeed := strconv.ParseInt(q.Get("seed"), 10, 64)
+		page, errPage := strconv.Atoi(q.Get("page"))
+		if !slices.Contains(names, q.Get("name")) {
 			err = errors.New("name must be one of " + strings.Join(names, ", "))
+		} else if err = errors.Join(errMin, errSeed, errPage); err == nil {
+			res, err = idx.mood(q.Get("name"), floor, shuffle, page, count)
 		}
 	default:
 		reply(404, map[string]string{"error": "not found"})

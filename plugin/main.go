@@ -1,5 +1,5 @@
 // Navidrome plugin for the navidrome-sonic sidecar: similar tracks and Instant
-// Mix in similarity.go, weekly mood playlists in moods.go. This file registers
+// Mix in similarity.go, mood playlists in moods.go. This file registers
 // the plugin and holds the sidecar client.
 package main
 

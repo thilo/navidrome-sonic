@@ -519,28 +519,34 @@ func (idx *Index) similar(seed, count int) ([]match, error) {
 	return out, nil
 }
 
-// mood returns the tracks with the highest stored score for a mood, each
-// recording once. It does not use the vectors.
-func (idx *Index) mood(name string, count int) ([]match, error) {
-	res, err := idx.db.Query("SELECT meta, json_extract(mood, ?) AS score FROM track WHERE emb IS NOT NULL "+
-		"ORDER BY score DESC, rowid", "$."+name)
+// mood returns one page of the tracks with a stored score of at least floor for
+// a mood, each recording once. The order is random but fixed by seed, so the pages
+// of one seed do not overlap. It does not use the vectors.
+func (idx *Index) mood(name string, floor float64, seed int64, page, count int) ([]match, error) {
+	res, err := idx.db.Query("SELECT meta, json_extract(mood, ?1) AS score FROM track WHERE emb IS NOT NULL "+
+		"AND score >= ?2 ORDER BY rowid", "$."+name, floor)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Close()
 	out, taken := []match{}, map[string]bool{}
-	for len(out) < count && res.Next() {
+	for res.Next() {
 		var meta string
-		var score sql.NullFloat64
+		var score float64
 		if err := res.Scan(&meta, &score); err != nil {
 			return nil, err
 		}
 		if t := parse(meta); !t.in(taken) {
-			out = append(out, match{t.song, score.Float64})
+			out = append(out, match{t.song, score})
 			t.take(taken)
 		}
 	}
-	return out, res.Err()
+	if err := res.Err(); err != nil {
+		return nil, err
+	}
+	rand.New(rand.NewSource(seed)).Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
+	start := min(page*count, len(out))
+	return out[start:min(start+count, len(out))], nil
 }
 
 // route returns a path from start to end: it steps along the straight line

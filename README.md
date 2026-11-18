@@ -3,15 +3,15 @@
 Audio-similarity recommendations for [Navidrome](https://www.navidrome.org/):
 Instant Mix in the web UI, `getSimilarSongs2`, and the OpenSubsonic
 `getSonicSimilarTracks` / `findSonicPath` calls, ranked by what the tracks sound
-like, and six mood playlists per user, refreshed weekly.
+like, and six mood playlists per user, refreshed every second day.
 
 ## Features
 
 - Similar tracks and Instant Mix from the audio itself, not from tags or play
   history.
 - Mood playlists: "Happy Mix", "Sad Mix", "Relaxed Mix", "Aggressive Mix",
-  "Party Mix" and "Dance Mix" for every user, 30 tracks each, drawn from the
-  user's libraries and replaced every Monday.
+  "Party Mix" and "Dance Mix" for every user, 50 tracks each, drawn from the
+  user's libraries and replaced every second day.
 - Independent of file paths: the plugin needs no filesystem access, and
   Navidrome and the sidecar may mount the library at different paths (see
   [Track lookup](#track-lookup)).
@@ -41,9 +41,10 @@ Two parts, built into one image:
 - `plugin/`, a Navidrome plugin (`sonic.ndp`) that implements the
   SonicSimilarity capability and the `GetSimilarSongsByTrack` metadata agent by
   asking the sidecar, and writes the mood playlists: five minutes after it
-  loads and every Monday at 04:00, it takes each user's 150 highest-scoring
-  tracks per mood and replaces the playlist's songs with 30 of them, picked at
-  random. Only playlists the plugin created are touched.
+  loads and at 04:00 on every odd day of the month, it asks the sidecar for
+  random pages of the tracks that score at least 0.8 for a mood, up to ten
+  pages of 100, until 50 of them lie in the user's libraries, and replaces the
+  playlist's songs with those. Only playlists the plugin created are touched.
 
 On start the container copies `sonic.ndp` into `/plugins`, which Navidrome
 mounts as its plugin folder.
