@@ -134,7 +134,9 @@ matches the answer within the libraries the requesting user can open: a track
 in someone else's library drops out, a track in a shared library stays. For
 Instant Mix the plugin asks for three times the requested count, so dropped
 tracks leave room for shared ones; `getSonicSimilarTracks` and `findSonicPath`
-return at most the requested count before that filtering.
+return at most the requested count before that filtering. For a mood playlist
+the plugin knows the user and asks for further random pages until 50 tracks
+remain, so a user who can open few of the tracks still gets a full playlist.
 
 ## Enabling the plugin
 
