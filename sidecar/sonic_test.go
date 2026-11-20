@@ -10,6 +10,7 @@ import (
 	"hash/fnv"
 	"math"
 	"math/rand"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -277,16 +278,53 @@ func TestIndex(t *testing.T) {
 		t.Error(names(sim), names(res))
 	}
 
-	// Moods: highest score first, a recording once even when it is in two libraries.
+	// Moods: only tracks at the floor or above, a recording once even when it is in two libraries.
 	m := newTestIndex(t, []row{{path: "sad", artist: "A", vec: base, happy: 0.1}, {path: "glad", artist: "B", vec: base, happy: 0.9},
-		{path: "glad-copy", artist: "B", vec: base, name: "glad", happy: 0.9}, {path: "ok", artist: "C", vec: base, happy: 0.6}})
-	res, _ = m.mood("happy", 10)
-	if n := names(res); !slices.Equal(n, []string{"glad", "ok", "sad"}) {
+		{path: "glad-copy", artist: "B", vec: base, name: "glad", happy: 0.9}, {path: "ok", artist: "C", vec: base, happy: 0.8}})
+	res, _ = m.mood("happy", 0.8, 1, 0, 10)
+	n := names(res)
+	slices.Sort(n)
+	if !slices.Equal(n, []string{"glad", "ok"}) {
 		t.Error(n)
 	}
-	res, _ = m.mood("happy", 2)
-	if len(res) != 2 || res[0].Similarity != 0.9 || res[1].Similarity != 0.6 {
-		t.Error(res)
+	// Without min the endpoint applies its default.
+	index.Store(m)
+	defer index.Store(nil)
+	for params, want := range map[string]int{"": 2, "&min=0": 3} {
+		w := httptest.NewRecorder()
+		handle(w, httptest.NewRequest("GET", "/mood?name=happy&seed=1&page=0&count=10"+params, nil))
+		var body struct{ Matches []json.RawMessage }
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Matches) != want {
+			t.Error(params, w.Body.String())
+		}
+	}
+	// Pages of one seed repeat and do not overlap; another seed reorders them.
+	var many []row
+	var want []string
+	for i := range 20 {
+		p := fmt.Sprintf("t%02d", i)
+		many, want = append(many, row{path: p, artist: p, vec: base, happy: 0.9}), append(want, p)
+	}
+	m = newTestIndex(t, many)
+	var got []string
+	for page := range 3 {
+		res, _ = m.mood("happy", 0.8, 1, page, 8)
+		again, _ := m.mood("happy", 0.8, 1, page, 8)
+		if !slices.Equal(names(res), names(again)) {
+			t.Error(names(res), names(again))
+		}
+		got = append(got, names(res)...)
+	}
+	other, _ := m.mood("happy", 0.8, 2, 0, 20)
+	if slices.Equal(got, want) || slices.Equal(got, names(other)) {
+		t.Error(got, names(other))
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Error(got)
+	}
+	if res, _ = m.mood("happy", 0.8, 1, 3, 8); len(res) != 0 {
+		t.Error(names(res))
 	}
 }
 

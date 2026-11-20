@@ -2,7 +2,7 @@
   "name": "Sonic similarity",
   "author": "Thilo Utke",
   "version": "0.2.0",
-  "description": "Similar tracks, Instant Mix and weekly mood playlists from audio analysis by the navidrome-sonic sidecar",
+  "description": "Similar tracks, Instant Mix and mood playlists from audio analysis by the navidrome-sonic sidecar",
   "permissions": {
     "http": {
       "reason": "Query the navidrome-sonic sidecar, a private address on the Docker network",
@@ -26,7 +26,7 @@
       "reason": "Find, create and refill each user's mood playlists"
     },
     "scheduler": {
-      "reason": "Refresh the mood playlists weekly"
+      "reason": "Refresh the mood playlists every second day"
     }
   }
 }

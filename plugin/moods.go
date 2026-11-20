@@ -1,6 +1,6 @@
-// Mood playlists. Every Monday, and once 5 minutes after the plugin loads, each
-// user the plugin is granted gets six playlists ("Happy Mix" and so on): 30
-// tracks drawn at random from the 150 the sidecar scores highest for that mood
+// Mood playlists. Every second day, and once 5 minutes after the plugin loads,
+// each user the plugin is granted gets six playlists ("Happy Mix" and so on): 50
+// tracks drawn at random from those the sidecar scores at least 0.8 for that mood
 // among the tracks in the libraries that user can open. A playlist is found again
 // by owner, name and the comment "navidrome-sonic", and its tracks are replaced;
 // renaming it or editing the comment detaches it.
@@ -20,10 +20,16 @@ import (
 )
 
 const (
-	moodCron   = "0 4 * * 1"
-	moodPool   = 150
-	moodSize   = 30
+	// Odd days of the month, so a 31st is followed by a run on the 1st.
+	moodCron   = "0 4 */2 * *"
+	moodSize   = 50
 	moodMarker = "navidrome-sonic"
+	// The mood heads output a probability; a track needs this much to count as that mood.
+	moodMin = 0.8
+	// The sidecar does not know which tracks a user can open, so random pages are
+	// matched until the playlist is full. A user who can open under 5% of the
+	// tracks that pass moodMin can end up with a shorter playlist.
+	moodPage, moodPages = 100, 10
 	// Navidrome cuts every plugin call off after 30 seconds, so each user and mood
 	// is its own scheduled call, started this many seconds after the previous one.
 	moodSpacing = 30
@@ -81,32 +87,36 @@ func (plugin) OnCallback(req scheduler.SchedulerCallbackRequest) error {
 }
 
 // refreshMood replaces the tracks of user's playlist for mood, creating it if
-// needed. It asks the sidecar for twice the pool: tracks in libraries the user
-// cannot open, and copies that match the same track, drop out in the match.
+// needed. Tracks in libraries the user cannot open, and copies that match the
+// same track, drop out in the match. One seed keeps a refresh's pages apart.
 func refreshMood(user, mood, name string) error {
-	res, err := query("/mood", url.Values{"name": {mood}, "count": {strconv.Itoa(2 * moodPool)}})
-	if err != nil {
-		return err
-	}
-	tracks, err := host.MatcherMatchSongs(songs(res), host.MatchOptions{Username: user})
-	if err != nil {
-		return err
-	}
+	sample := url.Values{"name": {mood}, "min": {strconv.FormatFloat(moodMin, 'f', -1, 64)},
+		"seed": {strconv.FormatInt(rand.Int64(), 10)}, "count": {strconv.Itoa(moodPage)}}
 	seen := map[string]bool{}
 	var ids []string
-	for _, t := range tracks {
-		if t == nil || seen[t.ID] {
-			continue
+	for page := 0; page < moodPages && len(ids) < moodSize; page++ {
+		sample.Set("page", strconv.Itoa(page))
+		res, err := query("/mood", sample)
+		if err != nil {
+			return err
 		}
-		seen[t.ID] = true
-		if ids = append(ids, t.ID); len(ids) == moodPool {
+		if len(res.Matches) == 0 {
 			break
+		}
+		tracks, err := host.MatcherMatchSongs(songs(res), host.MatchOptions{Username: user})
+		if err != nil {
+			return err
+		}
+		for _, t := range tracks {
+			if t != nil && !seen[t.ID] {
+				seen[t.ID] = true
+				ids = append(ids, t.ID)
+			}
 		}
 	}
 	if len(ids) == 0 {
 		return nil
 	}
-	rand.Shuffle(len(ids), func(i, j int) { ids[i], ids[j] = ids[j], ids[i] })
 	params := url.Values{"u": {user}, "songId": ids[:min(moodSize, len(ids))]}
 
 	var lists struct {
